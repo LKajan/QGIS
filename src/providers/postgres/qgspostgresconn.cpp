@@ -39,6 +39,7 @@
 
 #include <QApplication>
 #include <QFile>
+#include <QScopeGuard>
 #include <QString>
 #include <QStringList>
 #include <QThread>
@@ -1679,27 +1680,192 @@ PGresult *QgsPostgresConn::PQprepare( const QString &stmtName, const QString &qu
   return res;
 }
 
+namespace
+{
+  //! UTF-8 copies of the parameters of one prepared statement call, in the form libpq expects. Null strings are passed as NULL.
+  class QgsPostgresParamValues
+  {
+    public:
+      explicit QgsPostgresParamValues( const QStringList &params )
+      {
+        mUtf8.reserve( params.size() );
+        mValues.reserve( params.size() );
+        for ( const QString &param : params )
+        {
+          mUtf8 << param.toUtf8();
+          mValues.push_back( param.isNull() ? nullptr : mUtf8.constLast().constData() );
+        }
+      }
+
+      int count() const { return static_cast<int>( mValues.size() ); }
+      const char *const *values() const { return mValues.data(); }
+
+    private:
+      QList<QByteArray> mUtf8;
+      std::vector<const char *> mValues;
+  };
+
+  using QgsPostgresResults = std::vector<std::unique_ptr<QgsPostgresResult>>;
+
+  //! Returns an error result with the connection's current error message, for failures that don't come with a result
+  std::unique_ptr<QgsPostgresResult> connectionErrorResult( PGconn *conn )
+  {
+    return std::make_unique<QgsPostgresResult>( ::PQmakeEmptyPGresult( conn, PGRES_FATAL_ERROR ) );
+  }
+
+  //! Runs the prepared statement once per params entry, one round trip each, and stops at the first error
+  void execPreparedSequential( PGconn *conn, const QByteArray &stmtName, const QList<QStringList> &paramsList, QgsPostgresResults &results )
+  {
+    for ( const QStringList &params : paramsList )
+    {
+      const QgsPostgresParamValues values( params );
+      PGresult *res = ::PQexecPrepared( conn, stmtName.constData(), values.count(), values.values(), nullptr, nullptr, 0 );
+      if ( !res )
+      {
+        results.push_back( connectionErrorResult( conn ) );
+        return;
+      }
+
+      results.push_back( std::make_unique<QgsPostgresResult>( res ) );
+      const ExecStatusType status = ::PQresultStatus( res );
+      if ( status != PGRES_TUPLES_OK && status != PGRES_COMMAND_OK )
+        return;
+    }
+  }
+
+#ifdef LIBPQ_HAS_PIPELINING
+  //! Reads and discards results up to and including the pipeline's sync point. Returns false if it can't be reached.
+  bool drainPipelineToSync( PGconn *conn )
+  {
+    bool previousWasNull = false;
+    while ( ::PQstatus( conn ) == CONNECTION_OK )
+    {
+      PGresult *res = ::PQgetResult( conn );
+      if ( !res )
+      {
+        // each query's results end with a null result, so two in a row mean that nothing more comes
+        if ( previousWasNull )
+          return false;
+        previousWasNull = true;
+        continue;
+      }
+      previousWasNull = false;
+      const ExecStatusType status = ::PQresultStatus( res );
+      ::PQclear( res );
+      if ( status == PGRES_PIPELINE_SYNC )
+        return true;
+    }
+    return false;
+  }
+
+  /**
+   * Queues the prepared statement once per params entry and then reads all the results, so the
+   * batch costs about one round trip. The connection must be in pipeline mode, and leaves it on
+   * every way out unless the connection is broken.
+   */
+  void execPreparedPipelined( PGconn *conn, const QByteArray &stmtName, const QList<QStringList> &paramsList, QgsPostgresResults &results )
+  {
+    bool synced = false;
+    bool atSync = false;
+    // Set when the remaining results can't be read reliably, e.g. when the connection is lost. They are
+    // then left unread, exiting pipeline mode fails, and the reset path of the next query cleans up.
+    bool broken = false;
+
+    const auto exitPipeline = qScopeGuard( [&] {
+      // results are only left unread here when something threw
+      if ( !broken && !atSync && ::PQstatus( conn ) == CONNECTION_OK && ( synced || ::PQpipelineSync( conn ) == 1 ) )
+        drainPipelineToSync( conn );
+      if ( ::PQexitPipelineMode( conn ) != 1 )
+        QgsMessageLog::logMessage( QgsPostgresConn::tr( "Could not exit pipeline mode: %1" ).arg( QString::fromUtf8( ::PQerrorMessage( conn ) ) ), QgsPostgresConn::tr( "PostGIS" ) );
+    } );
+
+    std::unique_ptr<QgsPostgresResult> sendError;
+    int queued = 0;
+    for ( const QStringList &params : paramsList )
+    {
+      const QgsPostgresParamValues values( params );
+      if ( ::PQsendQueryPrepared( conn, stmtName.constData(), values.count(), values.values(), nullptr, nullptr, 0 ) != 1 )
+      {
+        // the statements queued so far still run, and the error is reported after their results
+        sendError = connectionErrorResult( conn );
+        break;
+      }
+      ++queued;
+    }
+
+    synced = ::PQpipelineSync( conn ) == 1;
+    if ( !synced )
+    {
+      // only fails on a write error or out of memory: the connection can't be used anymore, and reading could block
+      broken = true;
+      results.push_back( sendError ? std::move( sendError ) : connectionErrorResult( conn ) );
+      return;
+    }
+
+    bool failed = false;
+    for ( int i = 0; i < queued; ++i )
+    {
+      PGresult *res = ::PQgetResult( conn );
+      if ( !res )
+      {
+        broken = true;
+        break;
+      }
+
+      if ( failed )
+      {
+        // after an error the server skips the rest of the pipeline, these are PGRES_PIPELINE_ABORTED
+        ::PQclear( res );
+      }
+      else
+      {
+        results.push_back( std::make_unique<QgsPostgresResult>( res ) );
+        const ExecStatusType status = ::PQresultStatus( res );
+        failed = status != PGRES_TUPLES_OK && status != PGRES_COMMAND_OK;
+      }
+
+      // each query's results end with a null result
+      if ( PGresult *extra = ::PQgetResult( conn ) )
+      {
+        ::PQclear( extra );
+        broken = true;
+        break;
+      }
+      if ( ::PQstatus( conn ) == CONNECTION_BAD )
+      {
+        broken = true;
+        break;
+      }
+    }
+
+    if ( !broken )
+    {
+      PGresult *res = ::PQgetResult( conn );
+      atSync = res && ::PQresultStatus( res ) == PGRES_PIPELINE_SYNC;
+      ::PQclear( res );
+      broken = !atSync;
+    }
+
+    if ( failed )
+      return;
+
+    if ( broken )
+      results.push_back( connectionErrorResult( conn ) );
+    else if ( sendError )
+      results.push_back( std::move( sendError ) );
+  }
+#endif
+} // namespace
+
 PGresult *QgsPostgresConn::PQexecPrepared( const QString &stmtName, const QStringList &params, const QString &originatorClass, const QString &queryOrigin )
 {
   QMutexLocker locker( &mLock );
 
-  const char **param = new const char *[params.size()];
-  QList<QByteArray> qparam;
-
-  qparam.reserve( params.size() );
-  for ( int i = 0; i < params.size(); i++ )
-  {
-    qparam << params[i].toUtf8();
-
-    if ( params[i].isNull() )
-      param[i] = nullptr;
-    else
-      param[i] = qparam[i];
-  }
+  const QgsPostgresParamValues values( params );
 
   auto logWrapper = std::make_unique<QgsDatabaseQueryLogWrapper>( u"PQexecPrepared(%1)"_s.arg( stmtName ), mConnInfo, u"postgres"_s, originatorClass, queryOrigin );
 
-  PGresult *res { ::PQexecPrepared( mConn, stmtName.toUtf8(), params.size(), param, nullptr, nullptr, 0 ) };
+  PGresult *res { ::PQexecPrepared( mConn, stmtName.toUtf8(), values.count(), values.values(), nullptr, nullptr, 0 ) };
 
   const int errorStatus = PQresultStatus( res );
 
@@ -1708,9 +1874,44 @@ PGresult *QgsPostgresConn::PQexecPrepared( const QString &stmtName, const QStrin
     logWrapper->setError( PQresultErrorMessage( res ) );
   }
 
-  delete[] param;
-
   return res;
+}
+
+std::vector<std::unique_ptr<QgsPostgresResult>> QgsPostgresConn::PQexecPreparedBatch( const QString &stmtName, const QList<QStringList> &paramsList, const QString &originatorClass, const QString &queryOrigin )
+{
+  QMutexLocker locker( &mLock );
+
+  QgsPostgresResults results;
+  if ( paramsList.isEmpty() )
+    return results;
+  results.reserve( paramsList.size() );
+
+  const QByteArray name = stmtName.toUtf8();
+
+  bool pipeline = false;
+#ifdef LIBPQ_HAS_PIPELINING
+  // hidden setting, a workaround for poolers and proxies that don't handle pipelining well
+  const bool pipeliningDisabled = QgsSettings().value( u"PostgreSQL/disablePipelining"_s, false, QgsSettings::Providers ).toBool();
+  pipeline = !pipeliningDisabled && ::PQpipelineStatus( mConn ) == PQ_PIPELINE_OFF && ::PQenterPipelineMode( mConn ) == 1;
+#endif
+
+  const QString logQuery = u"PQexecPreparedBatch(%1) x %2 [%3]"_s.arg( stmtName ).arg( paramsList.size() ).arg( pipeline ? "pipeline"_L1 : "sequential"_L1 );
+  QgsDatabaseQueryLogWrapper logWrapper( logQuery, mConnInfo, u"postgres"_s, originatorClass, queryOrigin );
+
+#ifdef LIBPQ_HAS_PIPELINING
+  if ( pipeline )
+    execPreparedPipelined( mConn, name, paramsList, results );
+  else
+#endif
+    execPreparedSequential( mConn, name, paramsList, results );
+
+  const ExecStatusType lastStatus = results.back()->PQresultStatus();
+  if ( lastStatus != PGRES_TUPLES_OK && lastStatus != PGRES_COMMAND_OK )
+  {
+    logWrapper.setError( tr( "Statement %1 of %2 failed: %3" ).arg( results.size() ).arg( paramsList.size() ).arg( results.back()->PQresultErrorMessage() ) );
+  }
+
+  return results;
 }
 
 void QgsPostgresConn::PQfinish()

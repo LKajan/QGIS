@@ -449,6 +449,13 @@ class QgsPostgresProvider final : public QgsVectorDataProvider
 
     QString paramValue( const QString &fieldvalue, const QString &defaultValue ) const;
 
+    /**
+     * Returns the parameters of the addfeatures statement for \a feature, and sets the values
+     * that the database fills in (e.g. defaults) on the feature's attributes.
+     * This can run queries on the connection, so it must not be called while a batch runs.
+     */
+    QStringList addFeatureParams( QgsFeature &feature, const QList<int> &fieldId, const QStringList &defaultValues ) const;
+
     mutable QgsPostgresConn *mConnectionRO = nullptr; //!< Read-only database connection (initially)
     QgsPostgresConn *mConnectionRW = nullptr;         //!< Read-write database connection (on update)
 

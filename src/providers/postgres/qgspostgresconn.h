@@ -20,6 +20,9 @@
 
 #include "qgsconfig.h"
 
+#include <memory>
+#include <vector>
+
 #include "qgis.h"
 #include "qgsdatasourceuri.h"
 #include "qgsdbquerylog_p.h"
@@ -333,6 +336,21 @@ class QgsPostgresConn : public QObject
     int PQstatus() const;
     PGresult *PQprepare( const QString &stmtName, const QString &query, int nParams, const Oid *paramTypes, const QString &originatorClass = QString(), const QString &queryOrigin = QString() );
     PGresult *PQexecPrepared( const QString &stmtName, const QStringList &params, const QString &originatorClass = QString(), const QString &queryOrigin = QString() );
+
+    /**
+     * Executes the prepared statement \a stmtName once for each entry of \a paramsList and returns
+     * the results in the same order.
+     * Uses libpq pipeline mode when available, so the whole batch costs about one round trip.
+     * Otherwise, or when pipelining is disabled in the settings, statements run one at a time.
+     * Execution stops at the first statement that fails. The returned list then ends with an error
+     * result for it and can be shorter than \a paramsList. Otherwise it has one result per entry.
+     * Run it inside a transaction: outside one, a pipelined batch is a single implicit transaction
+     * that an error rolls back entirely, while the statements of a sequential batch commit one by one.
+     * The connection is always out of pipeline mode when this returns, unless the connection is broken.
+     */
+    std::vector<std::unique_ptr<QgsPostgresResult>> PQexecPreparedBatch(
+      const QString &stmtName, const QList<QStringList> &paramsList, const QString &originatorClass = QString(), const QString &queryOrigin = QString()
+    );
 
     /**
      * PQsendQuery is used for asynchronous queries (with PQgetResult)

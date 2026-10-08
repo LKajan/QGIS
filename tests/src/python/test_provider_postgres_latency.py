@@ -22,7 +22,10 @@ import unittest
 
 import psycopg2
 from qgis.core import (
+    QgsFeature,
     QgsFeatureRequest,
+    QgsGeometry,
+    QgsPointXY,
     QgsProject,
     QgsSettingsTree,
     QgsVectorLayer,
@@ -146,6 +149,44 @@ class TestPyQgsPostgresProviderLatency(QgisTestCase):
         duration = round(abs(time.time() - start_time), 1)
         self.setDelay(0)
         self.assertTrue(duration < 10, error_string.format(duration))
+
+    def testSaveAddedFeaturesToDB(self):
+        """Test Save added features to remote DB"""
+
+        self.execSQLCommand(
+            """
+          DROP TABLE IF EXISTS qgis_test.speed_test_remote_db_add CASCADE;
+          CREATE TABLE qgis_test.speed_test_remote_db_add (
+            id_serial serial NOT NULL,
+            name text,
+            geom geometry(Point,3857),
+            CONSTRAINT speed_test_remote_db_add_pk PRIMARY KEY (id_serial) );"""
+        )
+
+        set_new_layer = ' sslmode=disable key=\'id_serial\' srid=3857 type=POINT table="qgis_test"."speed_test_remote_db_add" (geom) sql='
+        # one round trip per feature took about 400s
+        error_string = "Save added features to remote DB : expected < 10s, got {}s"
+
+        vl = QgsVectorLayer(
+            self.dbconn + set_new_layer, "test_vl_remote_add", "postgres"
+        )
+        self.assertTrue(vl.isValid())
+        self.assertTrue(vl.startEditing())
+        features = []
+        for i in range(2000):
+            f = QgsFeature(vl.fields())
+            f["name"] = f"feature {i}"
+            f.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(100.0 * i, 0.0)))
+            features.append(f)
+        self.assertTrue(vl.addFeatures(features))
+
+        self.setDelay(100)
+        start_time = time.time()
+        self.assertTrue(vl.commitChanges())
+        duration = round(abs(time.time() - start_time), 1)
+        self.setDelay(0)
+        self.assertTrue(duration < 10, error_string.format(duration))
+        self.assertEqual(vl.featureCount(), 2000)
 
     def testProjectOpenTime(self):
         """open project, provider-parallel-loading = False"""

@@ -2316,6 +2316,78 @@ QString QgsPostgresProvider::geomParam( int offset ) const
   return geometry;
 }
 
+QStringList QgsPostgresProvider::addFeatureParams( QgsFeature &feature, const QList<int> &fieldId, const QStringList &defaultValues ) const
+{
+  QgsAttributes attrs = feature.attributes();
+
+  QStringList params;
+  if ( !mGeometryColumn.isNull() )
+  {
+    appendGeomParam( feature.geometry(), params );
+  }
+
+  params.reserve( fieldId.size() );
+  for ( int i = 0; i < fieldId.size(); i++ )
+  {
+    int attrIdx = fieldId[i];
+    QVariant value = attrIdx < attrs.length() ? attrs.at( attrIdx ) : QgsVariantUtils::createNullVariant( QMetaType::Type::Int );
+
+    QString v;
+    if ( QgsVariantUtils::isNull( value ) || QgsVariantUtils::isUnsetAttributeValue( value ) )
+    {
+      const QgsField fld = field( attrIdx );
+      v = paramValue( defaultValues[i], defaultValues[i] );
+      feature.setAttribute( attrIdx, convertValue( fld.type(), fld.subType(), v, fld.typeName() ) );
+    }
+    else
+    {
+      const QgsField fld = field( attrIdx );
+      const QString fieldTypeName = fld.typeName();
+      // the conversion functions expects the list as a string, so convert it according to the field type
+      if ( fieldTypeName == "json"_L1 || fieldTypeName == "jsonb"_L1 )
+      {
+        v = QString::fromStdString( QgsJsonUtils::jsonFromVariant( value ).dump() );
+      }
+      else if ( fieldTypeName == "bytea"_L1 )
+      {
+        v = "\\x" + value.toByteArray().toHex();
+      }
+      else if ( value.userType() == QMetaType::Type::QStringList )
+      {
+        QStringList list_vals = value.toStringList();
+        // all strings need to be double quoted to allow special postgres
+        // array characters such as {, or whitespace in the string
+        // but we need to escape all double quotes and backslashes
+        list_vals.replaceInStrings( "\\", "\\\\" );
+        list_vals.replaceInStrings( "\"", "\\\"" );
+        v = u"{\""_s + value.toStringList().join( "\",\""_L1 ) + u"\"}"_s;
+      }
+      else if ( value.userType() == QMetaType::Type::QVariantList )
+      {
+        v = "{" + value.toStringList().join( "," ) + "}";
+      }
+      else
+      {
+        v = paramValue( value.toString(), defaultValues[i] );
+      }
+
+      if ( v != value.toString() && fieldTypeName != "json"_L1 && fieldTypeName != "jsonb"_L1 && fieldTypeName != "bytea"_L1 )
+      {
+        feature.setAttribute( attrIdx, convertValue( fld.type(), fld.subType(), v, fld.typeName() ) );
+      }
+    }
+
+    params << v;
+  }
+
+  return params;
+}
+
+//! Maximum number of features whose INSERTs addFeatures() sends in one batch
+constexpr qsizetype ADD_FEATURES_BATCH_MAX_FEATURES = 500;
+//! Maximum total length of the parameter strings that addFeatures() holds for one batch
+constexpr qsizetype ADD_FEATURES_BATCH_MAX_CHARS = 16 * 1024 * 1024;
+
 bool QgsPostgresProvider::addFeatures( QgsFeatureList &flist, Flags flags )
 {
   if ( flist.isEmpty() )
@@ -2532,89 +2604,56 @@ bool QgsPostgresProvider::addFeatures( QgsFeatureList &flist, Flags flags )
     if ( stmt.PQresultStatus() != PGRES_COMMAND_OK )
       throw PGException( stmt );
 
-    for ( QgsFeatureList::iterator feature = flist.begin(); feature != flist.end(); ++feature )
+    // Statements are sent in chunks: each chunk costs about one round trip, and the size caps bound the memory held for its params
+    QList<QStringList> chunkParams;
+    qsizetype chunkStart = 0;
+    while ( chunkStart < flist.size() )
     {
-      QgsAttributes attrs = feature->attributes();
-
-      QStringList params;
-      if ( !mGeometryColumn.isNull() )
+      // Build all the params first. This can run queries (default values), which isn't possible once the batch runs.
+      chunkParams.clear();
+      qsizetype chunkChars = 0;
+      while ( chunkStart + chunkParams.size() < flist.size() && chunkParams.size() < ADD_FEATURES_BATCH_MAX_FEATURES && chunkChars < ADD_FEATURES_BATCH_MAX_CHARS )
       {
-        appendGeomParam( feature->geometry(), params );
+        const QStringList params = addFeatureParams( flist[chunkStart + chunkParams.size()], fieldId, defaultValues );
+        for ( const QString &param : params )
+          chunkChars += param.size();
+        chunkParams << params;
       }
 
-      params.reserve( fieldId.size() );
-      for ( int i = 0; i < fieldId.size(); i++ )
+      const std::vector<std::unique_ptr<QgsPostgresResult>> results = conn->PQexecPreparedBatch( u"addfeatures"_s, chunkParams, u"QgsPostgresProvider"_s, QGS_QUERY_LOG_ORIGIN );
+
+      for ( std::size_t resultIdx = 0; resultIdx < results.size(); ++resultIdx )
       {
-        int attrIdx = fieldId[i];
-        QVariant value = attrIdx < attrs.length() ? attrs.at( attrIdx ) : QgsVariantUtils::createNullVariant( QMetaType::Type::Int );
+        QgsPostgresResult &result = *results[resultIdx];
+        QgsFeature &feature = flist[chunkStart + static_cast<qsizetype>( resultIdx )];
 
-        QString v;
-        if ( QgsVariantUtils::isNull( value ) || QgsVariantUtils::isUnsetAttributeValue( value ) )
+        if ( !( flags & QgsFeatureSink::FastInsert ) && result.PQresultStatus() == PGRES_TUPLES_OK )
         {
-          const QgsField fld = field( attrIdx );
-          v = paramValue( defaultValues[i], defaultValues[i] );
-          feature->setAttribute( attrIdx, convertValue( fld.type(), fld.subType(), v, fld.typeName() ) );
-        }
-        else
-        {
-          const QgsField fld = field( attrIdx );
-          const QString fieldTypeName = fld.typeName();
-          // the conversion functions expects the list as a string, so convert it according to the field type
-          if ( fieldTypeName == "json"_L1 || fieldTypeName == "jsonb"_L1 )
+          for ( int i = 0; i < mPrimaryKeyAttrs.size(); ++i )
           {
-            v = QString::fromStdString( QgsJsonUtils::jsonFromVariant( value ).dump() );
-          }
-          else if ( fieldTypeName == "bytea"_L1 )
-          {
-            v = "\\x" + value.toByteArray().toHex();
-          }
-          else if ( value.userType() == QMetaType::Type::QStringList )
-          {
-            QStringList list_vals = value.toStringList();
-            // all strings need to be double quoted to allow special postgres
-            // array characters such as {, or whitespace in the string
-            // but we need to escape all double quotes and backslashes
-            list_vals.replaceInStrings( "\\", "\\\\" );
-            list_vals.replaceInStrings( "\"", "\\\"" );
-            v = u"{\""_s + value.toStringList().join( "\",\""_L1 ) + u"\"}"_s;
-          }
-          else if ( value.userType() == QMetaType::Type::QVariantList )
-          {
-            v = "{" + value.toStringList().join( "," ) + "}";
-          }
-          else
-          {
-            v = paramValue( value.toString(), defaultValues[i] );
-          }
-
-          if ( v != value.toString() && fieldTypeName != "json"_L1 && fieldTypeName != "jsonb"_L1 && fieldTypeName != "bytea"_L1 )
-          {
-            feature->setAttribute( attrIdx, convertValue( fld.type(), fld.subType(), v, fld.typeName() ) );
+            const int idx = mPrimaryKeyAttrs.at( i );
+            const QgsField fld = mAttributeFields.at( idx );
+            feature.setAttribute( idx, convertValue( fld.type(), fld.subType(), result.PQgetvalue( 0, i ), fld.typeName() ) );
           }
         }
+        else if ( result.PQresultStatus() != PGRES_COMMAND_OK )
+          throw PGException( result );
 
-        params << v;
-      }
-
-      QgsPostgresResult result( conn->PQexecPrepared( u"addfeatures"_s, params, u"QgsPostgresProvider"_s, QGS_QUERY_LOG_ORIGIN ) );
-
-      if ( !( flags & QgsFeatureSink::FastInsert ) && result.PQresultStatus() == PGRES_TUPLES_OK )
-      {
-        for ( int i = 0; i < mPrimaryKeyAttrs.size(); ++i )
+        if ( !( flags & QgsFeatureSink::FastInsert ) && mPrimaryKeyType == PktOid )
         {
-          const int idx = mPrimaryKeyAttrs.at( i );
-          const QgsField fld = mAttributeFields.at( idx );
-          feature->setAttribute( idx, convertValue( fld.type(), fld.subType(), result.PQgetvalue( 0, i ), fld.typeName() ) );
+          feature.setId( result.PQoidValue() );
+          QgsDebugMsgLevel( u"new fid=%1"_s.arg( feature.id() ), 4 );
         }
       }
-      else if ( result.PQresultStatus() != PGRES_COMMAND_OK )
-        throw PGException( result );
 
-      if ( !( flags & QgsFeatureSink::FastInsert ) && mPrimaryKeyType == PktOid )
+      // a shorter list always ends with an error result, so this only guards against a broken batch
+      if ( results.size() != static_cast<std::size_t>( chunkParams.size() ) )
       {
-        feature->setId( result.PQoidValue() );
-        QgsDebugMsgLevel( u"new fid=%1"_s.arg( feature->id() ), 4 );
+        QgsPostgresResult missing;
+        throw PGException( missing );
       }
+
+      chunkStart += chunkParams.size();
     }
 
     if ( !( flags & QgsFeatureSink::FastInsert ) )

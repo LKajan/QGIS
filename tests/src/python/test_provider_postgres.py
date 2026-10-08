@@ -40,6 +40,7 @@ from qgis.core import (
     QgsFeatureSource,
     QgsFieldConstraints,
     QgsGeometry,
+    QgsLineString,
     QgsProcessingContext,
     QgsProcessingFeedback,
     QgsProcessingUtils,
@@ -1663,6 +1664,171 @@ class TestPyQgsPostgresProvider(QgisTestCase, ProviderTestCase):
         )  # Should not deadlock during an active iteration
         f = next(it)
         l.commitChanges()
+
+    def _setPipeliningDisabled(self, disabled):
+        """Sets whether the provider pipelines the INSERTs of addFeatures, until the end of the test"""
+        settings = QgsSettings()
+        settings.setValue(
+            "PostgreSQL/disablePipelining", disabled, QgsSettings.Section.Providers
+        )
+        self.addCleanup(
+            QgsSettings().remove,
+            "PostgreSQL/disablePipelining",
+            QgsSettings.Section.Providers,
+        )
+
+    def _createBatchInsertLayer(self):
+        """Returns a layer on a new, empty table for the batched addFeatures tests"""
+        self.execSQLCommand("DROP TABLE IF EXISTS qgis_test.batch_insert CASCADE")
+        self.execSQLCommand(
+            """CREATE TABLE qgis_test.batch_insert (
+                pk serial PRIMARY KEY,
+                code int UNIQUE,
+                name text,
+                cat text DEFAULT 'default value',
+                geom geometry(LineString, 4326))"""
+        )
+        self.addCleanup(
+            self.execSQLCommand, "DROP TABLE IF EXISTS qgis_test.batch_insert CASCADE"
+        )
+        vl = QgsVectorLayer(
+            self.dbconn
+            + ' sslmode=disable key=\'pk\' srid=4326 type=LINESTRING table="qgis_test"."batch_insert" (geom) sql=',
+            "batch_insert",
+            "postgres",
+        )
+        self.assertTrue(vl.isValid())
+        return vl
+
+    def _batchInsertFeatures(self, vl, count, large_geometries=()):
+        """Returns count features with code 0..count-1, and 100k vertex lines at the indexes in large_geometries"""
+        features = []
+        for i in range(count):
+            f = QgsFeature(vl.fields())
+            f["code"] = i
+            f["name"] = f"feature {i}"
+            if i in large_geometries:
+                xs = [float(x) for x in range(100000)]
+                f.setGeometry(QgsGeometry(QgsLineString(xs, [float(i)] * len(xs))))
+            else:
+                f.setGeometry(QgsGeometry.fromWkt(f"LineString({i} 0, {i} 1)"))
+            features.append(f)
+        return features
+
+    def _batchInsertRowCount(self):
+        cur = self.con.cursor()
+        cur.execute("SELECT count(*) FROM qgis_test.batch_insert")
+        count = cur.fetchone()[0]
+        cur.close()
+        self.con.commit()
+        return count
+
+    def testAddFeaturesInBatches(self):
+        """Test adding more features than fit in one batch of INSERTs"""
+        for pipelining_disabled in (False, True):
+            for fast_insert in (False, True):
+                with self.subTest(
+                    pipelining_disabled=pipelining_disabled, fast_insert=fast_insert
+                ):
+                    self._setPipeliningDisabled(pipelining_disabled)
+                    vl = self._createBatchInsertLayer()
+                    # 6 large lines end the first batch at the size cap
+                    features = self._batchInsertFeatures(
+                        vl, 1201, large_geometries=range(100, 106)
+                    )
+                    flags = (
+                        QgsFeatureSink.Flag.FastInsert
+                        if fast_insert
+                        else QgsFeatureSink.Flags()
+                    )
+
+                    ok, added = vl.dataProvider().addFeatures(features, flags)
+                    self.assertTrue(ok, vl.dataProvider().lastError())
+                    self.assertEqual(len(added), 1201)
+                    self.assertEqual(self._batchInsertRowCount(), 1201)
+
+                    stored = {f["code"]: f for f in vl.getFeatures()}
+                    self.assertEqual(len(stored), 1201)
+                    for i, f in enumerate(added):
+                        row = stored[i]
+                        self.assertEqual(row["name"], f"feature {i}")
+                        self.assertTrue(
+                            row.geometry().equals(features[i].geometry()),
+                            f"geometry of feature {i} differs",
+                        )
+                        if not fast_insert:
+                            self.assertEqual(f["code"], i)
+                            self.assertEqual(f["pk"], row["pk"])
+                            self.assertEqual(f.id(), row.id())
+
+    def testAddFeaturesBatchError(self):
+        """Test that a failing INSERT in a batch rolls back all the features"""
+        for pipelining_disabled in (False, True):
+            # in the first and in the second batch
+            for duplicate_at in (100, 700):
+                with self.subTest(
+                    pipelining_disabled=pipelining_disabled, duplicate_at=duplicate_at
+                ):
+                    self._setPipeliningDisabled(pipelining_disabled)
+                    vl = self._createBatchInsertLayer()
+                    self.execSQLCommand(
+                        "INSERT INTO qgis_test.batch_insert (code, name) VALUES (-1, 'existing')"
+                    )
+                    provider = vl.dataProvider()
+
+                    features = self._batchInsertFeatures(vl, 1000)
+                    features[duplicate_at]["code"] = 0
+                    ok, _ = provider.addFeatures(features)
+                    self.assertFalse(ok)
+                    self.assertIn(
+                        "duplicate key value violates unique constraint",
+                        provider.lastError(),
+                    )
+                    self.assertEqual(self._batchInsertRowCount(), 1)
+
+                    # the connection is still usable
+                    ok, added = provider.addFeatures(self._batchInsertFeatures(vl, 3))
+                    self.assertTrue(ok, provider.lastError())
+                    self.assertEqual([f["code"] for f in added], [0, 1, 2])
+                    self.assertEqual(self._batchInsertRowCount(), 4)
+
+    def testAddFeaturesBatchInTransaction(self):
+        """Test batched INSERTs in a transaction group, with default values that are read on the same connection"""
+        for pipelining_disabled in (False, True):
+            with self.subTest(pipelining_disabled=pipelining_disabled):
+                self._setPipeliningDisabled(pipelining_disabled)
+                vl = self._createBatchInsertLayer()
+                vl2 = QgsVectorLayer(vl.source(), "batch_insert_2", "postgres")
+                self.assertTrue(vl2.isValid())
+
+                p = QgsProject()
+                p.setTransactionMode(Qgis.TransactionMode.AutomaticGroups)
+                p.addMapLayers([vl, vl2])
+                self.assertTrue(vl.startEditing())
+                self.assertIsNotNone(vl.dataProvider().transaction())
+
+                # cat varies, so it is a parameter, and NULL gets the default value from the database
+                features = self._batchInsertFeatures(vl, 1000)
+                for i, f in enumerate(features):
+                    f["cat"] = NULL if i % 2 else f"explicit {i}"
+                self.assertTrue(vl.addFeatures(features))
+                self.assertTrue(vl.commitChanges(), vl.commitErrors())
+
+                cur = self.con.cursor()
+                cur.execute(
+                    "SELECT code, cat FROM qgis_test.batch_insert ORDER BY code"
+                )
+                rows = cur.fetchall()
+                cur.close()
+                self.con.commit()
+                self.assertEqual(
+                    rows,
+                    [
+                        (i, "default value" if i % 2 else f"explicit {i}")
+                        for i in range(1000)
+                    ],
+                )
+                p.removeAllMapLayers()
 
     def testTimeout(self):
         """
