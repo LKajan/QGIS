@@ -1,0 +1,815 @@
+{
+  "label": "pipeline-nopipe",
+  "meta": {
+    "method_sha1": "5f50d48b70cd",
+    "timestamp": "2026-10-08T08:56:24+00:00",
+    "host": "GISPO-LK02",
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.43",
+    "cpus": 22,
+    "load_avg_at_start": [
+      0.53,
+      2.42,
+      4.23
+    ],
+    "python": "3.14.4",
+    "git_commit": "204b5e404307ca9363c3e056f3f62bc7d3f1cea0",
+    "git_branch": "master",
+    "provider_diff_stat": "src/providers/postgres/qgspostgresconn.cpp     | 229 +++++++++++++++++++++++--\n src/providers/postgres/qgspostgresconn.h       |  18 ++\n src/providers/postgres/qgspostgresprovider.cpp | 171 +++++++++++-------\n src/providers/postgres/qgspostgresprovider.h   |   7 +\n 4 files changed, 345 insertions(+), 80 deletions(-)",
+    "provider_dirty": true,
+    "qgis_version": "4.3.0-Master",
+    "build_dir": "/home/lauri/dev/QGIS/build",
+    "build_type": "Debug",
+    "provider_lib_mtime": "2026-10-08T11:41:26",
+    "libpq_path": "/usr/lib/x86_64-linux-gnu/libpq.so.5",
+    "libpq_version": 180006,
+    "server_version": "PostgreSQL 11.8 (Debian 11.8-1.pgdg100+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 8.3.0-6) 8.3.0, 64-bit",
+    "postgis_version": "2.5.4",
+    "db": "localhost:5432/qgis_test"
+  },
+  "config": {
+    "latencies": [
+      "direct",
+      "10",
+      "50"
+    ],
+    "repeats": 3,
+    "points": 1000,
+    "large_count": 64,
+    "large_vertices": 10000,
+    "scenarios": [
+      "provider_points",
+      "provider_points_fastinsert",
+      "layer_commit_points",
+      "exporter_points",
+      "provider_points_defaults",
+      "provider_large_polygons"
+    ],
+    "disable_pipelining": true
+  },
+  "scenario_descriptions": {
+    "provider_points": "provider.addFeatures(), points + 3 attributes, serial PK, ids returned",
+    "provider_points_fastinsert": "provider.addFeatures( FastInsert ), points + 3 attributes",
+    "layer_commit_points": "layer edit session: addFeatures() + commitChanges() (time of commit)",
+    "exporter_points": "QgsVectorLayerExporter.exportLayer() memory layer -> new table (FastInsert, includes CREATE TABLE)",
+    "provider_points_defaults": "provider.addFeatures(), extra column with DEFAULT, every other value NULL (paramValue() SELECT per NULL)",
+    "provider_large_polygons": "provider.addFeatures(), large polygons (bandwidth bound, crosses the 16M char chunk cap)"
+  },
+  "results": [
+    {
+      "scenario": "provider_points",
+      "latency": "direct",
+      "features": 1000,
+      "runs": [
+        {
+          "seconds": 0.1523,
+          "error": null,
+          "proxy": null
+        },
+        {
+          "seconds": 0.1616,
+          "error": null,
+          "proxy": null
+        },
+        {
+          "seconds": 0.1513,
+          "error": null,
+          "proxy": null
+        }
+      ],
+      "ok": true,
+      "median_s": 0.1523,
+      "min_s": 0.1513,
+      "max_s": 0.1616,
+      "ms_per_feature": 0.152,
+      "client_turns": null
+    },
+    {
+      "scenario": "provider_points_fastinsert",
+      "latency": "direct",
+      "features": 1000,
+      "runs": [
+        {
+          "seconds": 0.1599,
+          "error": null,
+          "proxy": null
+        },
+        {
+          "seconds": 0.1483,
+          "error": null,
+          "proxy": null
+        },
+        {
+          "seconds": 0.1414,
+          "error": null,
+          "proxy": null
+        }
+      ],
+      "ok": true,
+      "median_s": 0.1483,
+      "min_s": 0.1414,
+      "max_s": 0.1599,
+      "ms_per_feature": 0.148,
+      "client_turns": null
+    },
+    {
+      "scenario": "layer_commit_points",
+      "latency": "direct",
+      "features": 1000,
+      "runs": [
+        {
+          "seconds": 0.1655,
+          "error": null,
+          "proxy": null
+        },
+        {
+          "seconds": 0.1491,
+          "error": null,
+          "proxy": null
+        },
+        {
+          "seconds": 0.146,
+          "error": null,
+          "proxy": null
+        }
+      ],
+      "ok": true,
+      "median_s": 0.1491,
+      "min_s": 0.146,
+      "max_s": 0.1655,
+      "ms_per_feature": 0.149,
+      "client_turns": null
+    },
+    {
+      "scenario": "exporter_points",
+      "latency": "direct",
+      "features": 1000,
+      "runs": [
+        {
+          "seconds": 0.1717,
+          "error": null,
+          "proxy": null
+        },
+        {
+          "seconds": 0.168,
+          "error": null,
+          "proxy": null
+        },
+        {
+          "seconds": 0.1623,
+          "error": null,
+          "proxy": null
+        }
+      ],
+      "ok": true,
+      "median_s": 0.168,
+      "min_s": 0.1623,
+      "max_s": 0.1717,
+      "ms_per_feature": 0.168,
+      "client_turns": null
+    },
+    {
+      "scenario": "provider_points_defaults",
+      "latency": "direct",
+      "features": 1000,
+      "runs": [
+        {
+          "seconds": 0.2369,
+          "error": null,
+          "proxy": null
+        },
+        {
+          "seconds": 0.2239,
+          "error": null,
+          "proxy": null
+        },
+        {
+          "seconds": 0.2474,
+          "error": null,
+          "proxy": null
+        }
+      ],
+      "ok": true,
+      "median_s": 0.2369,
+      "min_s": 0.2239,
+      "max_s": 0.2474,
+      "ms_per_feature": 0.237,
+      "client_turns": null
+    },
+    {
+      "scenario": "provider_large_polygons",
+      "latency": "direct",
+      "features": 64,
+      "runs": [
+        {
+          "seconds": 1.7887,
+          "error": null,
+          "proxy": null
+        },
+        {
+          "seconds": 1.7221,
+          "error": null,
+          "proxy": null
+        },
+        {
+          "seconds": 1.768,
+          "error": null,
+          "proxy": null
+        }
+      ],
+      "ok": true,
+      "median_s": 1.768,
+      "min_s": 1.7221,
+      "max_s": 1.7887,
+      "ms_per_feature": 27.625,
+      "client_turns": null
+    },
+    {
+      "scenario": "provider_points",
+      "latency": "10",
+      "features": 1000,
+      "runs": [
+        {
+          "seconds": 11.2321,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163889,
+            "server_bytes": 68961,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        },
+        {
+          "seconds": 11.2202,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163889,
+            "server_bytes": 68961,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        },
+        {
+          "seconds": 11.2419,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163889,
+            "server_bytes": 68961,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        }
+      ],
+      "ok": true,
+      "median_s": 11.2321,
+      "min_s": 11.2202,
+      "max_s": 11.2419,
+      "ms_per_feature": 11.232,
+      "client_turns": 1004
+    },
+    {
+      "scenario": "provider_points_fastinsert",
+      "latency": "10",
+      "features": 1000,
+      "runs": [
+        {
+          "seconds": 11.2312,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163874,
+            "server_bytes": 32068,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        },
+        {
+          "seconds": 11.229,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163874,
+            "server_bytes": 32068,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        },
+        {
+          "seconds": 11.229,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163874,
+            "server_bytes": 32068,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        }
+      ],
+      "ok": true,
+      "median_s": 11.229,
+      "min_s": 11.229,
+      "max_s": 11.2312,
+      "ms_per_feature": 11.229,
+      "client_turns": 1004
+    },
+    {
+      "scenario": "layer_commit_points",
+      "latency": "10",
+      "features": 1000,
+      "runs": [
+        {
+          "seconds": 11.2191,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163889,
+            "server_bytes": 68961,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        },
+        {
+          "seconds": 11.222,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163889,
+            "server_bytes": 68961,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        },
+        {
+          "seconds": 11.2274,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163889,
+            "server_bytes": 68961,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        }
+      ],
+      "ok": true,
+      "median_s": 11.222,
+      "min_s": 11.2191,
+      "max_s": 11.2274,
+      "ms_per_feature": 11.222,
+      "client_turns": 1004
+    },
+    {
+      "scenario": "exporter_points",
+      "latency": "10",
+      "features": 1000,
+      "runs": [
+        {
+          "seconds": 11.6754,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1044,
+            "client_bytes": 170157,
+            "server_bytes": 39229,
+            "client_chunks": 1044,
+            "server_chunks": 1044
+          }
+        },
+        {
+          "seconds": 11.6777,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1044,
+            "client_bytes": 170157,
+            "server_bytes": 39229,
+            "client_chunks": 1044,
+            "server_chunks": 1044
+          }
+        },
+        {
+          "seconds": 11.6889,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1044,
+            "client_bytes": 170157,
+            "server_bytes": 39229,
+            "client_chunks": 1044,
+            "server_chunks": 1044
+          }
+        }
+      ],
+      "ok": true,
+      "median_s": 11.6777,
+      "min_s": 11.6754,
+      "max_s": 11.6889,
+      "ms_per_feature": 11.678,
+      "client_turns": 1044
+    },
+    {
+      "scenario": "provider_points_defaults",
+      "latency": "10",
+      "features": 1000,
+      "runs": [
+        {
+          "seconds": 16.8793,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1504,
+            "client_bytes": 185410,
+            "server_bytes": 100961,
+            "client_chunks": 1504,
+            "server_chunks": 1504
+          }
+        },
+        {
+          "seconds": 16.8924,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1504,
+            "client_bytes": 185410,
+            "server_bytes": 100961,
+            "client_chunks": 1504,
+            "server_chunks": 1504
+          }
+        },
+        {
+          "seconds": 16.8707,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1504,
+            "client_bytes": 185410,
+            "server_bytes": 100961,
+            "client_chunks": 1504,
+            "server_chunks": 1504
+          }
+        }
+      ],
+      "ok": true,
+      "median_s": 16.8793,
+      "min_s": 16.8707,
+      "max_s": 16.8924,
+      "ms_per_feature": 16.879,
+      "client_turns": 1504
+    },
+    {
+      "scenario": "provider_large_polygons",
+      "latency": "10",
+      "features": 64,
+      "runs": [
+        {
+          "seconds": 2.5214,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 68,
+            "client_bytes": 40971840,
+            "server_bytes": 4411,
+            "client_chunks": 214,
+            "server_chunks": 68
+          }
+        },
+        {
+          "seconds": 2.6712,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 68,
+            "client_bytes": 40971840,
+            "server_bytes": 4411,
+            "client_chunks": 200,
+            "server_chunks": 68
+          }
+        },
+        {
+          "seconds": 2.4746,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 68,
+            "client_bytes": 40971840,
+            "server_bytes": 4411,
+            "client_chunks": 218,
+            "server_chunks": 68
+          }
+        }
+      ],
+      "ok": true,
+      "median_s": 2.5214,
+      "min_s": 2.4746,
+      "max_s": 2.6712,
+      "ms_per_feature": 39.397,
+      "client_turns": 68
+    },
+    {
+      "scenario": "provider_points",
+      "latency": "50",
+      "features": 1000,
+      "runs": [
+        {
+          "seconds": 52.5555,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163889,
+            "server_bytes": 68961,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        },
+        {
+          "seconds": 52.566,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163889,
+            "server_bytes": 68961,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        },
+        {
+          "seconds": 52.5296,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163889,
+            "server_bytes": 68961,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        }
+      ],
+      "ok": true,
+      "median_s": 52.5555,
+      "min_s": 52.5296,
+      "max_s": 52.566,
+      "ms_per_feature": 52.556,
+      "client_turns": 1004
+    },
+    {
+      "scenario": "provider_points_fastinsert",
+      "latency": "50",
+      "features": 1000,
+      "runs": [
+        {
+          "seconds": 52.5032,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163874,
+            "server_bytes": 32068,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        },
+        {
+          "seconds": 52.4509,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163874,
+            "server_bytes": 32068,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        },
+        {
+          "seconds": 52.5164,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163874,
+            "server_bytes": 32068,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        }
+      ],
+      "ok": true,
+      "median_s": 52.5032,
+      "min_s": 52.4509,
+      "max_s": 52.5164,
+      "ms_per_feature": 52.503,
+      "client_turns": 1004
+    },
+    {
+      "scenario": "layer_commit_points",
+      "latency": "50",
+      "features": 1000,
+      "runs": [
+        {
+          "seconds": 52.5088,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163889,
+            "server_bytes": 68961,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        },
+        {
+          "seconds": 52.4856,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163889,
+            "server_bytes": 68961,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        },
+        {
+          "seconds": 52.4664,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1004,
+            "client_bytes": 163889,
+            "server_bytes": 68961,
+            "client_chunks": 1004,
+            "server_chunks": 1004
+          }
+        }
+      ],
+      "ok": true,
+      "median_s": 52.4856,
+      "min_s": 52.4664,
+      "max_s": 52.5088,
+      "ms_per_feature": 52.486,
+      "client_turns": 1004
+    },
+    {
+      "scenario": "exporter_points",
+      "latency": "50",
+      "features": 1000,
+      "runs": [
+        {
+          "seconds": 54.6403,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1044,
+            "client_bytes": 170157,
+            "server_bytes": 39229,
+            "client_chunks": 1044,
+            "server_chunks": 1044
+          }
+        },
+        {
+          "seconds": 54.634,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1044,
+            "client_bytes": 170157,
+            "server_bytes": 39229,
+            "client_chunks": 1044,
+            "server_chunks": 1044
+          }
+        },
+        {
+          "seconds": 54.6467,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1044,
+            "client_bytes": 170157,
+            "server_bytes": 39229,
+            "client_chunks": 1044,
+            "server_chunks": 1044
+          }
+        }
+      ],
+      "ok": true,
+      "median_s": 54.6403,
+      "min_s": 54.634,
+      "max_s": 54.6467,
+      "ms_per_feature": 54.64,
+      "client_turns": 1044
+    },
+    {
+      "scenario": "provider_points_defaults",
+      "latency": "50",
+      "features": 1000,
+      "runs": [
+        {
+          "seconds": 78.6132,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1504,
+            "client_bytes": 185410,
+            "server_bytes": 100961,
+            "client_chunks": 1504,
+            "server_chunks": 1504
+          }
+        },
+        {
+          "seconds": 78.5131,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1504,
+            "client_bytes": 185410,
+            "server_bytes": 100961,
+            "client_chunks": 1504,
+            "server_chunks": 1504
+          }
+        },
+        {
+          "seconds": 78.6948,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 1504,
+            "client_bytes": 185410,
+            "server_bytes": 100961,
+            "client_chunks": 1504,
+            "server_chunks": 1504
+          }
+        }
+      ],
+      "ok": true,
+      "median_s": 78.6132,
+      "min_s": 78.5131,
+      "max_s": 78.6948,
+      "ms_per_feature": 78.613,
+      "client_turns": 1504
+    },
+    {
+      "scenario": "provider_large_polygons",
+      "latency": "50",
+      "features": 64,
+      "runs": [
+        {
+          "seconds": 5.3107,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 68,
+            "client_bytes": 40971840,
+            "server_bytes": 4411,
+            "client_chunks": 196,
+            "server_chunks": 68
+          }
+        },
+        {
+          "seconds": 5.5006,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 68,
+            "client_bytes": 40971840,
+            "server_bytes": 4411,
+            "client_chunks": 196,
+            "server_chunks": 68
+          }
+        },
+        {
+          "seconds": 5.3991,
+          "error": null,
+          "proxy": {
+            "connections": 0,
+            "client_turns": 68,
+            "client_bytes": 40971840,
+            "server_bytes": 4411,
+            "client_chunks": 198,
+            "server_chunks": 68
+          }
+        }
+      ],
+      "ok": true,
+      "median_s": 5.3991,
+      "min_s": 5.3107,
+      "max_s": 5.5006,
+      "ms_per_feature": 84.361,
+      "client_turns": 68
+    }
+  ]
+}
